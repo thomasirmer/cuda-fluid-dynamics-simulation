@@ -8,6 +8,10 @@
 #ifndef DEFINES_CUH_
 #define DEFINES_CUH_
 
+// native data structure
+typedef float Vector[2];
+
+// data structure for simulation
 struct Vector2D {
     float x;
     float y;
@@ -30,5 +34,13 @@ struct Vector2D {
     }
 };
 
+// data structure needed for visualization
+struct DataBlock {
+    unsigned char   *output_bitmap;
+    float           *dev_inSrc;
+    float           *dev_outSrc;
+    float           *dev_constSrc;
+    CPUAnimBitmap   *bitmap;
+};
 
 #endif /* DEFINES_CUH_ */
