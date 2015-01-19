@@ -5,27 +5,32 @@
 #include "utils.h"
 #include "defines.cuh"
 
-#define SIM_WIDTH  512
-#define SIM_HEIGHT 512
+#define SIM_WIDTH  128
+#define SIM_HEIGHT 128
 
-__global__ void copy_const_kernel(float *inputValues,
-		const float *constantValues) {
-	// map from threadIdx/BlockIdx to pixel position
-	int x = threadIdx.x + blockIdx.x * blockDim.x;
-	int y = threadIdx.y + blockIdx.y * blockDim.y;
-	int offset = x + y * blockDim.x * gridDim.x;
+#define _DEBUG_
 
-	if (constantValues[offset] != 0)
-		inputValues[offset] = constantValues[offset];
+// 2D grid of 2D blocks
+__device__ int getGlobalThreadId() {
+	int blockId = blockIdx.x + blockIdx.y * gridDim.x;
+	int threadId = blockId * (blockDim.x * blockDim.y)
+			+ (threadIdx.y * blockDim.x) + threadIdx.x;
+
+	return threadId;
+}
+
+__global__ void copy_const_kernel(float *inputValues, const float *constantValues) {
+	int threadId = getGlobalThreadId();
+
+	inputValues[threadId * 2] = constantValues[threadId * 2];
+	inputValues[threadId * 2 + 1] = constantValues[threadId * 2 + 1];
 }
 
 __global__ void simulate(float *outputValues, const float *inputValues) {
-	// map from threadIdx/BlockIdx to pixel position
-	int x = threadIdx.x + blockIdx.x * blockDim.x;
-	int y = threadIdx.y + blockIdx.y * blockDim.y;
-	int offset = x + y * blockDim.x * gridDim.x;
+	int threadId = getGlobalThreadId();
 
-	outputValues[offset] = inputValues[offset] * 0.999f;
+	outputValues[threadId * 2] = inputValues[threadId * 2];
+	outputValues[threadId * 2 + 1] = inputValues[threadId * 2 + 1];
 }
 
 void anim_exit(DataBlock *d) {
@@ -40,15 +45,19 @@ void anim_gpu(DataBlock *d, int ticks) {
 	dim3 threads(32, 32);
 	CPUAnimBitmap* bitmap = d->bitmap;
 
-	copy_const_kernel<<<blocks, threads>>>(d->dev_inSrc, d->dev_constSrc);
+	//copy_const_kernel<<<blocks, threads>>>(d->dev_inSrc, d->dev_constSrc);
 	simulate<<<blocks, threads>>>(d->dev_outSrc, d->dev_inSrc);
 	swap(d->dev_inSrc, d->dev_outSrc);
 
 	// TODO: Implement this function that it uses both values!
-	float_to_color<<<blocks, threads>>>(d->output_bitmap, d->dev_inSrc);
+	float_to_color<<<blocks, threads>>>(d->output_bitmap, d->dev_outSrc);
+	cudaMemcpy(bitmap->get_ptr(), d->output_bitmap, bitmap->image_size(), cudaMemcpyDeviceToHost);
 
-	cudaMemcpy(bitmap->get_ptr(), d->output_bitmap, bitmap->image_size(),
-			cudaMemcpyDeviceToHost);
+#ifdef _DEBUG_
+	float* vectorField = new float[SIM_HEIGHT*SIM_WIDTH*2];
+	cudaMemcpy(vectorField, d->dev_outSrc, SIM_HEIGHT*SIM_WIDTH*2*sizeof(float), cudaMemcpyDeviceToHost);
+	printf("x1: %f, y1: %f, x2: %f, y2: %f\n", vectorField[0], vectorField[1], vectorField[2], vectorField[3]);
+#endif
 }
 
 int main(void) {
@@ -68,11 +77,11 @@ int main(void) {
 	dataBlock.bitmap = &animBitmap;
 
 	// allocate device memory
-	int imageSize = animBitmap.image_size();
-	cudaMalloc((void**) &dataBlock.output_bitmap, imageSize);
-	cudaMalloc((void**) &dataBlock.dev_inSrc, imageSize);
-	cudaMalloc((void**) &dataBlock.dev_outSrc, imageSize);
-	cudaMalloc((void**) &dataBlock.dev_constSrc, imageSize);
+	int imageSize = animBitmap.image_size(); // image_size() returns width * height * 4
+	cudaMalloc((void**) &dataBlock.output_bitmap, imageSize * 2);
+	cudaMalloc((void**) &dataBlock.dev_inSrc, imageSize * 2);
+	cudaMalloc((void**) &dataBlock.dev_outSrc, imageSize * 2);
+	cudaMalloc((void**) &dataBlock.dev_constSrc, imageSize * 2);
 
 	// initialize constant data (border pixels are all zero)
 	// top border
@@ -103,8 +112,7 @@ int main(void) {
 	}
 
 	// copy constant values to device
-	cudaMemcpy(dataBlock.dev_constSrc, vectorField, imageSize,
-			cudaMemcpyHostToDevice);
+	cudaMemcpy(dataBlock.dev_constSrc, vectorField, imageSize * 2, cudaMemcpyHostToDevice);
 
 	// random initialize vectorField
 	for (int i = 0; i < SIM_HEIGHT * SIM_WIDTH; i++) {
@@ -117,9 +125,15 @@ int main(void) {
 		vectorField[i][1] = yValue;
 	}
 
+#ifdef _DEBUG_
+	printf("Vector[0][x]: %f\n", vectorField[0][0]);
+	printf("Vector[0][y]: %f\n", vectorField[0][1]);
+	printf("Vector[1][x]: %f\n", vectorField[1][0]);
+	printf("Vector[1][y]: %f\n", vectorField[1][1]);
+#endif
+
 	// copy input values to device
-	cudaMemcpy(dataBlock.dev_inSrc, vectorField, imageSize,
-			cudaMemcpyHostToDevice);
+	cudaMemcpy(dataBlock.dev_inSrc, vectorField, imageSize * 2, cudaMemcpyHostToDevice);
 
 	// start simulation
 	animBitmap.anim_and_exit((void (*)(void*, int)) anim_gpu, (void (*)(void*))anim_exit );
