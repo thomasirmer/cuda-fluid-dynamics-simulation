@@ -6,8 +6,8 @@
 #include "utils.h"
 #include "defines.cuh"
 
-#define SIM_WIDTH  1024
-#define SIM_HEIGHT 1024
+#define SIM_WIDTH  1280
+#define SIM_HEIGHT 720
 
 //#define _DEBUG_
 
@@ -23,15 +23,19 @@ __device__ int getGlobalThreadId() {
 __global__ void copy_const_kernel(float *inputValues, const float *constantValues) {
 	int threadId = getGlobalThreadId();
 
-	inputValues[threadId * 2] = constantValues[threadId * 2];
-	inputValues[threadId * 2 + 1] = constantValues[threadId * 2 + 1];
+	if (threadId < SIM_WIDTH * SIM_HEIGHT) {
+		inputValues[threadId * 2] = constantValues[threadId * 2];
+		inputValues[threadId * 2 + 1] = constantValues[threadId * 2 + 1];
+	}
 }
 
 __global__ void simulate(float *outputValues, const float *inputValues) {
 	int threadId = getGlobalThreadId();
 
-	outputValues[threadId * 2] = tan(inputValues[threadId * 2]);
-	outputValues[threadId * 2 + 1] = tan(inputValues[threadId * 2 + 1]);
+	if (threadId < SIM_WIDTH * SIM_HEIGHT) {
+		outputValues[threadId * 2] = tan(inputValues[threadId * 2]);
+		outputValues[threadId * 2 + 1] = tan(inputValues[threadId * 2 + 1]);
+	}
 }
 
 void anim_exit(DataBlock *d) {
@@ -42,7 +46,7 @@ void anim_exit(DataBlock *d) {
 
 void anim_gpu(DataBlock *d, int ticks) {
 	// TODO: Animation
-	dim3 blocks(SIM_WIDTH / 32, SIM_HEIGHT / 32);
+	dim3 blocks(ceil(SIM_WIDTH / 32.0f), ceil(SIM_HEIGHT / 32.0f));
 	dim3 threads(32, 32);
 	CPUAnimBitmap* bitmap = d->bitmap;
 
