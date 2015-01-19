@@ -75,20 +75,23 @@ __device__ unsigned char value(float n1, float n2, int hue) {
 	return (unsigned char) (255 * n1);
 }
 
-__global__ void float_to_color(unsigned char *outBitmap,
-		const float* vectorValues) {
+__global__ void float_to_color(unsigned char *outBitmap, const float* vectorValues) {
 	int threadID = getGlobalThreadId();
 
 	float xValue = vectorValues[threadID * 2];
 	float yValue = vectorValues[threadID * 2 + 1];
 
-	float angle  = getVectorAngle(xValue, yValue);
-	float length = getVectorLength(xValue, yValue);
+	float angleRad = getVectorAngle(xValue, yValue);
+	unsigned int angleDeg = (unsigned int) round(angleRad + 180.0f);
+	unsigned int length = (unsigned int) floor(getVectorLength(xValue, yValue) * 255);
+
+	unsigned char red, green, blue;
+	hsv2rgb(angleDeg, 255, length, &red, &green, &blue, 255);
 
 	// red - green - blue
-	outBitmap[threadID * 4 + 0] = ((angle + 180.0f) / 360.0f) * 255;
-	outBitmap[threadID * 4 + 1] = 0;
-	outBitmap[threadID * 4 + 2] = 0;
+	outBitmap[threadID * 4 + 0] = red;
+	outBitmap[threadID * 4 + 1] = green;
+	outBitmap[threadID * 4 + 2] = blue;
 	outBitmap[threadID * 4 + 3] = 255; // ??
 
 	// -------

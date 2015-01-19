@@ -43,77 +43,128 @@ __global__ void simulate(float *outputValues, const float *inputValues) {
 		outputValues[threadId * 2 + 1] = inputValues[threadId * 2 + 1];
 	}
 }
+
+__device__ void hsv2rgb(unsigned int hue, unsigned int sat, unsigned int val,
+		unsigned char * r, unsigned char * g, unsigned char * b,
+		unsigned char maxBrightness) {
+
+	unsigned int H_accent = hue / 60;
+	unsigned int bottom = ((255 - sat) * val) >> 8;
+	unsigned int top = val;
+	unsigned char rising = ((top - bottom) * (hue % 60)) / 60 + bottom;
+	unsigned char falling = ((top - bottom) * (60 - hue % 60)) / 60 + bottom;
+
+	switch (H_accent) {
+	case 0:
+		*r = top;
+		*g = rising;
+		*b = bottom;
+		break;
+
+	case 1:
+		*r = falling;
+		*g = top;
+		*b = bottom;
+		break;
+
+	case 2:
+		*r = bottom;
+		*g = top;
+		*b = rising;
+		break;
+
+	case 3:
+		*r = bottom;
+		*g = falling;
+		*b = top;
+		break;
+
+	case 4:
+		*r = rising;
+		*g = bottom;
+		*b = top;
+		break;
+
+	case 5:
+		*r = top;
+		*g = bottom;
+		*b = falling;
+		break;
+	}
+	// Scale values to maxBrightness
+	*r = *r * maxBrightness / 255;
+	*g = *g * maxBrightness / 255;
+	*b = *b * maxBrightness / 255;
+}
 // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
 void anim_exit(DataBlock *d) {
 	cudaFree(d->dev_inSrc);
 	cudaFree(d->dev_outSrc);
 	cudaFree(d->dev_constSrc);
+	cudaFree(d->bitmap);
+	cudaFree(d->output_bitmap);
 }
 
 void anim_gpu(DataBlock *d, int ticks) {
-// TODO: Animation
-	dim3 blocks(ceil(SIM_WIDTH / 32.0f), ceil(SIM_HEIGHT / 32.0f));
+	// TODO: Animation
+	dim3 blocks(ceil(SIM_WIDTH / 32), ceil(SIM_HEIGHT / 32));
 	dim3 threads(32, 32);
 	CPUAnimBitmap* bitmap = d->bitmap;
 
-//copy_const_kernel<<<blocks, threads>>>(d->dev_inSrc, d->dev_constSrc);
+	//copy_const_kernel<<<blocks, threads>>>(d->dev_inSrc, d->dev_constSrc);
 	simulate<<<blocks, threads>>>(d->dev_outSrc, d->dev_inSrc);
 	swap(d->dev_inSrc, d->dev_outSrc);
 
-// TODO: Implement float_to_color that it uses both values!
+	// TODO: Implement float_to_color that it uses both values!
 	float_to_color<<<blocks, threads>>>(d->output_bitmap, d->dev_outSrc);
 	cudaMemcpy(bitmap->get_ptr(), d->output_bitmap, bitmap->image_size(),
 			cudaMemcpyDeviceToHost);
-
-#ifdef _DEBUG_
-	unsigned char* h_bitmap = new unsigned char[bitmap->image_size() * 2];
-	cudaMemcpy(h_bitmap, d->output_bitmap, bitmap->image_size() * 2, cudaMemcpyDeviceToHost);
-	printf("%d\n", h_bitmap[0]);
-#endif
 }
 
 int main(void) {
 	printf("Starting CUDA-Application - Parallel Fluid Simulation ...\n");
 
-// TODO: initialize all the stuff
-//Vector2D* vectorField = new Vector2D[SIM_HEIGHT * SIM_WIDTH];
+	// TODO: initialize all the stuff
+	//Vector2D* vectorField = new Vector2D[SIM_HEIGHT * SIM_WIDTH];
 	Vector* vectorField = new Vector[SIM_HEIGHT * SIM_WIDTH];
 
-// TODO: do simulation (ihno)
+	// TODO: do simulation (ihno)
 
-// TODO: visualize (thomas)
-// >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+	// TODO: visualize (thomas)
+	// >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 	DataBlock dataBlock;
 	CPUAnimBitmap animBitmap(SIM_WIDTH, SIM_HEIGHT, &dataBlock);
 	dataBlock.bitmap = &animBitmap;
 
-// allocate device memory
+	// allocate device memory
 	int imageSize = animBitmap.image_size(); // image_size() returns width * height * 4
 	cudaMalloc((void**) &dataBlock.output_bitmap, imageSize * 2);
 	cudaMalloc((void**) &dataBlock.dev_inSrc, imageSize * 2);
 	cudaMalloc((void**) &dataBlock.dev_outSrc, imageSize * 2);
 
-// random initialize vectorField
+	// random initialize vectorField
 	for (int i = 0; i < SIM_HEIGHT * SIM_WIDTH; i++) {
 		// random values between [0.0 ... 1.0]
 		//float xValue = (float) rand() / (float) RAND_MAX;
 		//float yValue = (float) rand() / (float) RAND_MAX;
 
 		// circle values
-		float xValue = cos(((float) i / (SIM_WIDTH * SIM_HEIGHT - 1)) * 2 * M_PI);
-		float yValue = sin(((float) i / (SIM_WIDTH * SIM_HEIGHT - 1)) * 2 * M_PI);
+		float xValue = cos(
+				((float) i / (SIM_WIDTH * SIM_HEIGHT - 1)) * 2 * M_PI);
+		float yValue = sin(
+				((float) i / (SIM_WIDTH * SIM_HEIGHT - 1)) * 2 * M_PI);
 
 		// assign to vectorField
 		vectorField[i][0] = xValue;
 		vectorField[i][1] = yValue;
 	}
 
-// copy input values to device
+	// copy input values to device
 	cudaMemcpy(dataBlock.dev_inSrc, vectorField, imageSize * 2,
 			cudaMemcpyHostToDevice);
 
-// start simulation
+	// start simulation
 	animBitmap.anim_and_exit((void (*)(void*, int)) anim_gpu, (void (*)(void*))anim_exit );
-// <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+	// <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 }
