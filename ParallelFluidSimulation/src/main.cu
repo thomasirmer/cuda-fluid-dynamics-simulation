@@ -1,14 +1,15 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 
 #include "cpu_anim.h"
 #include "utils.h"
 #include "defines.cuh"
 
-#define SIM_WIDTH  128
-#define SIM_HEIGHT 128
+#define SIM_WIDTH  1024
+#define SIM_HEIGHT 1024
 
-#define _DEBUG_
+//#define _DEBUG_
 
 // 2D grid of 2D blocks
 __device__ int getGlobalThreadId() {
@@ -29,8 +30,8 @@ __global__ void copy_const_kernel(float *inputValues, const float *constantValue
 __global__ void simulate(float *outputValues, const float *inputValues) {
 	int threadId = getGlobalThreadId();
 
-	outputValues[threadId * 2] = inputValues[threadId * 2];
-	outputValues[threadId * 2 + 1] = inputValues[threadId * 2 + 1];
+	outputValues[threadId * 2] = tan(inputValues[threadId * 2]);
+	outputValues[threadId * 2 + 1] = tan(inputValues[threadId * 2 + 1]);
 }
 
 void anim_exit(DataBlock *d) {
