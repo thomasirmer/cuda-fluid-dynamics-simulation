@@ -8,6 +8,9 @@
 #ifndef DEFINES_CUH_
 #define DEFINES_CUH_
 
+#define SIM_WIDTH  512
+#define SIM_HEIGHT 512
+
 // native data structure
 typedef float Vector[2];
 

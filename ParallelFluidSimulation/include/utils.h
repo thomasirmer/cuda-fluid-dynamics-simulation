@@ -17,8 +17,10 @@
 #define __BOOK_H__
 #include <stdio.h>
 
-#include <kernel_functions.cuh>
+#include "defines.cuh"
+#include "kernel_functions.cuh"
 #include <math.h>
+
 
 static void HandleError(cudaError_t err, const char *file, int line) {
 	if (err != cudaSuccess) {
@@ -78,21 +80,24 @@ __device__ unsigned char value(float n1, float n2, int hue) {
 __global__ void float_to_color(unsigned char *outBitmap, const float* vectorValues) {
 	int threadID = getGlobalThreadId();
 
-	float xValue = vectorValues[threadID * 2];
-	float yValue = vectorValues[threadID * 2 + 1];
+	if (threadID < SIM_WIDTH * SIM_HEIGHT) {
+		float xValue = vectorValues[threadID * 2];
+		float yValue = vectorValues[threadID * 2 + 1];
 
-	float angleRad = getVectorAngle(xValue, yValue);
-	unsigned int angleDeg = (unsigned int) round(angleRad + 180.0f);
-	unsigned int length = (unsigned int) floor(getVectorLength(xValue, yValue) * 255);
+		float angleRad = getVectorAngle(xValue, yValue);
+		unsigned int angleDeg = (unsigned int) round(angleRad + 180.0f);
+		unsigned int length = (unsigned int) floor(
+				getVectorLength(xValue, yValue) * 255);
 
-	unsigned char red, green, blue;
-	hsv2rgb(angleDeg, 255, length, &red, &green, &blue, 255);
+		unsigned char red, green, blue;
+		hsv2rgb(angleDeg, 255, length, &red, &green, &blue, 255);
 
-	// red - green - blue
-	outBitmap[threadID * 4 + 0] = red;
-	outBitmap[threadID * 4 + 1] = green;
-	outBitmap[threadID * 4 + 2] = blue;
-	outBitmap[threadID * 4 + 3] = 255; // ??
+		// red - green - blue
+		outBitmap[threadID * 4 + 0] = red;
+		outBitmap[threadID * 4 + 1] = green;
+		outBitmap[threadID * 4 + 2] = blue;
+		outBitmap[threadID * 4 + 3] = 255; // ??
+	}
 
 	// -------
 
