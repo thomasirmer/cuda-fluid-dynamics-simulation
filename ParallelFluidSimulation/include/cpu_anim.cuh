@@ -17,7 +17,7 @@
 #ifndef __CPU_ANIM_H__
 #define __CPU_ANIM_H__
 
-#include "gl_helper.h"
+#include "gl_helper.cuh"
 
 #include <iostream>
 

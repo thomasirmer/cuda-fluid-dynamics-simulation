@@ -21,7 +21,6 @@
 #include "kernel_functions.cuh"
 #include <math.h>
 
-
 static void HandleError(cudaError_t err, const char *file, int line) {
 	if (err != cudaSuccess) {
 		printf("%s in %s at line %d\n", cudaGetErrorString(err), file, line);
@@ -86,36 +85,17 @@ __global__ void float_to_color(unsigned char *outBitmap, const float* vectorValu
 
 		float angleRad = getVectorAngle(xValue, yValue);
 		unsigned int angleDeg = (unsigned int) round(angleRad + 180.0f);
-		unsigned int length = (unsigned int) floor(
-				getVectorLength(xValue, yValue) * 255);
+		unsigned int length = (unsigned int) floor(getVectorLength(xValue, yValue) * 255);
 
 		unsigned char red, green, blue;
 		hsv2rgb(angleDeg, 255, length, &red, &green, &blue, 255);
 
-		// red - green - blue
+		// red - green - blue - (?) alpha (?)
 		outBitmap[threadID * 4 + 0] = red;
 		outBitmap[threadID * 4 + 1] = green;
 		outBitmap[threadID * 4 + 2] = blue;
-		outBitmap[threadID * 4 + 3] = 255; // ??
+		outBitmap[threadID * 4 + 3] = 255;
 	}
-
-	// -------
-
-//	float l = vectorValues[threadID];
-//	float s = 1;
-//	int h = (180 + (int) (360.0f * vectorValues[threadID])) % 360;
-//	float m1, m2;
-//
-//	if (l <= 0.5f)
-//		m2 = l * (1 + s);
-//	else
-//		m2 = l + s - l * s;
-//	m1 = 2 * l - m2;
-//
-//	outBitmap[threadID * 4 + 0] = value(m1, m2, h + 120);
-//	outBitmap[threadID * 4 + 1] = value(m1, m2, h);
-//	outBitmap[threadID * 4 + 2] = value(m1, m2, h - 120);
-//	outBitmap[threadID * 4 + 3] = 255;
 }
 
 __global__ void float_to_color(uchar4 *optr, const float *outSrc) {
