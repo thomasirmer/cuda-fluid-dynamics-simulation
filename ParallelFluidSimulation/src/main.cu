@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
+#include <unistd.h>
 
 #include "cpu_anim.cuh"
 #include "utils.cuh"
@@ -8,139 +9,17 @@
 
 #include "kernel_functions.cuh"
 
-#define SIM_WIDTH   512
-#define SIM_HEIGHT  512
-#define NUM_THREADS 32
+#define BLOCK_WIDTH 32
 
-#define BLOCKBREITE  NUM_THREADS
+#define BLOCKBREITE  BLOCK_WIDTH
 #define GESAMTBREITE SIM_WIDTH
 
 //#define _DEBUG_
 
+// KERNEL FIELDS >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+__shared__ Vector dots[BLOCK_WIDTH + 2][BLOCK_WIDTH + 2];
+
 // KERNEL FUNCTIONS >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-__shared__ Vector dots[BLOCKBREITE + 2][BLOCKBREITE + 2];
-
-__device__ void calculateNewValue(float* res) {
-	int threadID = getGlobalThreadId();
-
-	int x = threadIdx.x % 32 + 1;
-	int y = threadIdx.y % 32 + 1;
-
-	res[0] = dots[x][y][0];
-	res[1] = dots[x][y][1];
-
-	for (int yi = -1; yi < 2; yi++) {
-		for (int xi = -1; xi < 2; xi++) {
-			if (!(xi == 0 && yi == 0)) {
-				res[0] += dots[x + xi][y + yi][0];
-				res[1] += dots[x + xi][y + yi][1];
-			}
-		}
-	}
-
-	res[0] /= 9;
-	res[1] /= 9;
-}
-
-__device__ void copyToSharedMem(float* inDots) {
-
-	int threadID = getGlobalThreadId();
-
-	int x1 = threadIdx.x % 32;
-	int y1 = threadIdx.y % 32;
-
-	float initalValue = 0.0f;
-
-	dots[x1][y1][0] = inDots[threadID * 2];
-	dots[x1][y1][1] = inDots[threadID * 2 + 1];
-
-	int xPos = blockIdx.x * blockDim.x * 2 + x1;
-
-	// Wir befinden uns nicht in der ersten Reihe
-	if (blockIdx.y != 0) {
-		if (y1 == 0)
-			dots[x1 + 1][0][x1 % 2] = inDots[(blockIdx.y * 32 - 1) * GESAMTBREITE + xPos];
-		else if (y1 == 1)
-			dots[x1 + 1 + 16][0][x1 % 2] = inDots[(blockIdx.y * 32 - 1) * GESAMTBREITE + xPos + 32];
-		else if (y1 == 2 && (x1 == 0 || x1 == 1))
-			dots[0][0][(x1 + 1) % 2] = inDots[(blockIdx.y * 32 - 1) * GESAMTBREITE + xPos - (x1 * 2 + 1)];
-		else if (y1 == 3 && (x1 == 0 || x1 == 1))
-			dots[33][0][x1] = inDots[(blockIdx.y * 32 - 1) * GESAMTBREITE + xPos + (32 * 2)];
-	} else {
-		if (y1 == 0)
-			dots[x1 + 1][0][x1 % 2] = initalValue;
-		else if (y1 == 1)
-			dots[x1 + 1 + 16][0][x1 % 2] = initalValue;
-		else if (y1 == 2 && (x1 == 0 || x1 == 1))
-			dots[0][0][x1] = initalValue;
-		else if (y1 == 3 && (x1 == 0 || x1 == 1))
-			dots[33][0][x1] = initalValue;
-	}
-
-	// Nicht in der letzten Reihe
-	if (blockIdx.y != 512 / 32 - 1) {
-		if (y1 == 4)
-			dots[x1 + 1][33][x1 % 2] = inDots[((blockIdx.y + 1) * 32) * GESAMTBREITE + xPos];
-		else if (y1 == 5)
-			dots[x1 + 1 + 16][33][x1 % 2] = inDots[((blockIdx.y + 1) * 32) * GESAMTBREITE + xPos + 32];
-		else if (y1 == 6 && (x1 == 0 || x1 == 1))
-			dots[0][33][(x1 + 1) % 2] = inDots[((blockIdx.y + 1) * 32) * GESAMTBREITE + xPos - (x1 * 2 + 1)];
-		else if (y1 == 7 && (x1 == 0 || x1 == 1))
-			dots[33][33][x1] = inDots[((blockIdx.y + 1) * 32) * GESAMTBREITE + xPos + (32 * 2)];
-	} else {
-		if (y1 == 4)
-			dots[x1 + 1][33][0] = 0;
-		else if (y1 == 5)
-			dots[x1 + 1][33][1] = 0;
-		else if (y1 == 6 && (x1 == 0 || x1 == 1))
-			dots[0][33][x1] = 0;
-		else if (y1 == 7 && (x1 == 0 || x1 == 1))
-			dots[33][33][x1] = 0;
-	}
-
-	// Nicht erste Spalte
-	if (blockIdx.x != 0) {
-		if (y1 == 8)
-			dots[0][x1 + 1][(x1 + 1) % 2] = inDots[(blockIdx.y * 32) * GESAMTBREITE + (x1 / 2) * GESAMTBREITE + blockIdx.x * 64 - (1 + x1 % 2)];
-		if (y1 == 9)
-			dots[0][x1 + 1 + 16][(x1 + 1) % 2] = inDots[(blockIdx.y * 32) * GESAMTBREITE + (x1 / 2 + 16) * GESAMTBREITE + blockIdx.x * 64 - (1 + x1 % 2)];
-
-	} else {
-		if (y1 == 8)
-			dots[0][x1 + 1][0] = 0;
-		if (y1 == 9)
-			dots[0][x1 + 1][1] = 0;
-	}
-
-	if (blockIdx.x == 512 / 32 - 1) {
-		if (y1 == 10)
-			dots[33][x1 + 1][x1 % 2] = inDots[(blockIdx.y * 32) * GESAMTBREITE + (x1 / 2) * GESAMTBREITE + blockIdx.x * 64 + x1 % 2 + 64];
-		if (y1 == 11)
-			dots[33][x1 + 1 + 16][x1 % 2] = inDots[(blockIdx.y * 32) * GESAMTBREITE + (x1 / 2 + 16) * GESAMTBREITE + blockIdx.x * 64 + x1 % 2 + 64];
-	} else {
-		if (y1 == 10)
-			dots[33][x1 + 1][0] = 0;
-		if (y1 == 11)
-			dots[33][x1 + 1][1] = 0;
-	}
-
-	__syncthreads();
-
-}
-
-__global__ void simulate(float* inDots, float* outDots) {
-
-	int threadID = getGlobalThreadId();
-
-	copyToSharedMem(inDots);
-
-	float res[2];
-	calculateNewValue(res);
-
-	outDots[threadID * 2] = res[0];
-	outDots[threadID * 2 + 1] = res[1];
-}
-
 // global threadID for 2D grid of 2D blocks
 __device__ int getGlobalThreadId() {
 	int blockId = blockIdx.x + blockIdx.y * gridDim.x;
@@ -149,6 +28,155 @@ __device__ int getGlobalThreadId() {
 	return threadId;
 }
 
+__device__ int getArrayOffset() {
+	int xOffset = threadIdx.x + blockIdx.x * blockDim.x;
+	int yOffset = threadIdx.y + blockIdx.y * blockDim.y;
+	int offset = (xOffset + yOffset * blockDim.x * gridDim.x) * 2;
+
+	return offset;
+}
+
+__device__ int getArrayOffsetAbove() {
+	int xOffset = threadIdx.x + blockIdx.x * blockDim.x;
+	int yOffset = blockDim.y - 1 + blockIdx.y - 1 * blockDim.y;
+	int offset = (xOffset + yOffset * blockDim.x * gridDim.x) * 2;
+
+	return offset;
+}
+
+__device__ int getArrayOffsetBelow() {
+	int xOffset = threadIdx.x + blockIdx.x * blockDim.x;
+	int yOffset = 0 + blockIdx.y + 1 * blockDim.y;
+	int offset = (xOffset + yOffset * blockDim.x * gridDim.x) * 2;
+
+	return offset;
+}
+
+// simulate inside each block
+__device__ void calculateNewValue(float* res) {
+
+	int x = threadIdx.x % 32 + 1; // thread x-coordinate inside block
+	int y = threadIdx.y % 32 + 1; // thread y-coordinate inside block
+
+	res[0] = dots[x][y][0];
+	res[1] = dots[x][y][1];
+
+	res[0] += dots[x - 1][y][0];
+	res[1] += dots[x - 1][y][1];
+
+	res[0] += dots[x + 1][y][0];
+	res[1] += dots[x + 1][y][1];
+
+	res[0] += dots[x][y - 1][0];
+	res[1] += dots[x][y - 1][1];
+
+	res[0] += dots[x][y + 1][0];
+	res[1] += dots[x][y + 1][1];
+
+	res[0] /= 5.0f;
+	res[1] /= 5.0f;
+
+	__syncthreads();
+
+//	for (int yi = -1; yi < 2; yi++) {
+//		for (int xi = -1; xi < 2; xi++) {
+//			if (!(xi == 0 && yi == 0)) {
+//				res[0] += dots[x + xi][y + yi][0];
+//				res[1] += dots[x + xi][y + yi][1];
+//			}
+//		}
+//	}
+//
+//	res[0] /= 9;
+//	res[1] /= 9;
+}
+
+// copy input data to shared memory
+__device__ void copyToSharedMem(float* inDots) {
+
+	int offset   = getArrayOffset();
+
+	int x = threadIdx.x % 32 + 1; // thread x-coordinate inside block
+	int y = threadIdx.y % 32 + 1; // thread y-coordinate inside block
+
+	dots[x][y][0] = inDots[offset];		// copy x-values from global to shared memory
+	dots[x][y][1] = inDots[offset + 1];	// copy y-values from global to shared memory
+
+	__syncthreads();
+
+	bool isBorder = blockIdx.y == 0 || blockIdx.y == gridDim.y - 1 || blockIdx.x == 0 || blockIdx.x == gridDim.x - 1;
+	float initalValue = 0.0f; // initial value for border-pixels
+
+	if (blockIdx.y == 0) { // top border blocks
+		if (threadIdx.y == 0) { // top border pixels
+			dots[x][y - 1][0] = initalValue;
+			dots[x][y - 1][1] = initalValue;
+		} else if (threadIdx.y == blockDim.y - 1) { // pixels from block below
+			dots[x][y + 1][0] = inDots[offset - gridDim.x * blockDim.x * 2];
+			dots[x][y + 1][1] = inDots[offset + 1 - gridDim.x * blockDim.x * 2 + 1];
+		}
+	} else if (blockIdx.y == gridDim.y - 1) { // bottom border blocks
+		if (threadIdx.y == blockDim.y - 1) { // bottom border pixels
+			dots[x][y + 1][0] = initalValue;
+			dots[x][y + 1][1] = initalValue;
+		} else if (threadIdx.y == 0) { // pixels from block above
+			dots[x][y - 1][0] = inDots[offset + gridDim.x * blockDim.x * 2];
+			dots[x][y - 1][1] = inDots[offset + 1 + gridDim.x * blockDim.x * 2 + 1];
+		}
+	} else if (blockIdx.x == 0) { // left border blocks
+		if (threadIdx.x == 0) { // left border pixels
+			dots[x - 1][y][0] = initalValue;
+			dots[x - 1][y][1] = initalValue;
+		} else if (threadIdx.x == blockDim.x - 1) { // pixels from right-side block
+			dots[x + 1][y][0] = inDots[offset + 2];
+			dots[x + 1][y][1] = inDots[offset + 1 + 2];
+		}
+	} else if (blockIdx.x == gridDim.x - 1) { // right border blocks
+		if (threadIdx.x == blockDim.x - 1) { // right border pixels
+			dots[x + 1][y][0] = initalValue;
+			dots[x + 1][y][1] = initalValue;
+		} else if (threadIdx.x == 0) { // pixels from left-side block
+			dots[x - 1][y][0] = inDots[offset - 2];
+			dots[x - 1][y][1] = inDots[offset + 1 - 2];
+		}
+	}
+
+	// all non-border blocks
+	if (!isBorder) {
+		if (threadIdx.y == 0) { // top pixels
+			dots[x][y - 1][0] = inDots[offset + gridDim.x * blockDim.x * 2];
+			dots[x][y - 1][1] = inDots[offset + 1 + gridDim.x * blockDim.x * 2 + 1];
+		} else if (threadIdx.y == blockDim.y - 1) { // bottom pixels
+			dots[x][y + 1][0] = inDots[offset - gridDim.x * blockDim.x * 2];
+			dots[x][y + 1][1] = inDots[offset + 1 - gridDim.x * blockDim.x * 2 + 1];
+		} else if (threadIdx.x == 0) { // left pixels
+			dots[x - 1][y][0] = inDots[offset - 2];
+			dots[x - 1][y][1] = inDots[offset + 1 - 2];
+		} else if (threadIdx.x == blockDim.x - 1) { // right pixels
+			dots[x + 1][y][0] = inDots[offset + 2];
+			dots[x + 1][y][1] = inDots[offset + 1 + 2];
+		}
+	}
+
+	__syncthreads();
+}
+
+// simulation function (will be called once per run loop)
+__global__ void simulate(float* inDots, float* outDots) {
+
+	int threadID = getGlobalThreadId();
+	int offset	 = getArrayOffset();
+
+	copyToSharedMem(inDots);
+
+	float res[2];
+	calculateNewValue(res);
+
+	outDots[offset] = res[0];
+	outDots[offset + 1] = res[1];
+}
+
+// ANIMATION FUNCTIONS >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 // exit function for run-loop
 void anim_exit(DataBlock *d) {
 	cudaFree(d->dev_inSrc);
@@ -160,8 +188,8 @@ void anim_exit(DataBlock *d) {
 
 // animation run-loop function
 void anim_gpu(DataBlock *d, int ticks) {
-	dim3 blocks(ceil(SIM_WIDTH / NUM_THREADS), ceil(SIM_HEIGHT / NUM_THREADS));
-	dim3 threads(NUM_THREADS, NUM_THREADS);
+	dim3 blocks(ceil(SIM_WIDTH / BLOCK_WIDTH), ceil(SIM_HEIGHT / BLOCK_WIDTH));
+	dim3 threads(BLOCK_WIDTH, BLOCK_WIDTH);
 	CPUAnimBitmap* bitmap = d->bitmap;
 
 	//copy_const_kernel<<<blocks, threads>>>(d->dev_inSrc, d->dev_constSrc);
@@ -169,15 +197,18 @@ void anim_gpu(DataBlock *d, int ticks) {
 	float_to_color<<<blocks, threads>>>(d->output_bitmap, d->dev_outSrc);
 	swap(d->dev_inSrc, d->dev_outSrc);
 	cudaMemcpy(bitmap->get_ptr(), d->output_bitmap, bitmap->image_size(), cudaMemcpyDeviceToHost);
+
+//	usleep(1000000);
 }
 
+// MAIN >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 int main(void) {
 	printf("Starting CUDA-Application - Parallel Fluid Simulation ...\n");
 
 	// initialize data field which will be used for all further calculation
 	Vector* vectorField = new Vector[SIM_HEIGHT * SIM_WIDTH];
 
-	// set up stuff for graphical outout
+	// set up stuff for graphical output
 	DataBlock dataBlock;
 	CPUAnimBitmap animBitmap(SIM_WIDTH, SIM_HEIGHT, &dataBlock);
 	dataBlock.bitmap = &animBitmap;
