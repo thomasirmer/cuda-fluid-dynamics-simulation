@@ -12,7 +12,7 @@
 #define BLOCK_WIDTH 32
 
 #define BLOCKBREITE  BLOCK_WIDTH
-#define GESAMTBREITE SIM_WIDTH
+#define GESAMTBREITE 1024
 
 //#define _DEBUG_
 
@@ -28,6 +28,7 @@ __device__ int getGlobalThreadId() {
 	return threadId;
 }
 
+// offset for 1-dimensional array index
 __device__ int getArrayOffset() {
 	int xOffset = threadIdx.x + blockIdx.x * blockDim.x;
 	int yOffset = threadIdx.y + blockIdx.y * blockDim.y;
@@ -36,6 +37,7 @@ __device__ int getArrayOffset() {
 	return offset;
 }
 
+// offset for 1-dimensional array index for block above
 __device__ int getArrayOffsetAbove() {
 	int xOffset = threadIdx.x + blockIdx.x * blockDim.x;
 	int yOffset = blockDim.y - 1 + blockIdx.y - 1 * blockDim.y;
@@ -44,6 +46,7 @@ __device__ int getArrayOffsetAbove() {
 	return offset;
 }
 
+// offset for 1-dimensional array index for block below
 __device__ int getArrayOffsetBelow() {
 	int xOffset = threadIdx.x + blockIdx.x * blockDim.x;
 	int yOffset = 0 + blockIdx.y + 1 * blockDim.y;
@@ -61,40 +64,27 @@ __device__ void calculateNewValue(float* res) {
 	res[0] = dots[x][y][0];
 	res[1] = dots[x][y][1];
 
-	res[0] += dots[x - 1][y][0];
-	res[1] += dots[x - 1][y][1];
-
-	res[0] += dots[x + 1][y][0];
-	res[1] += dots[x + 1][y][1];
-
-	res[0] += dots[x][y - 1][0];
-	res[1] += dots[x][y - 1][1];
-
-	res[0] += dots[x][y + 1][0];
-	res[1] += dots[x][y + 1][1];
-
-	res[0] /= 5.0f;
-	res[1] /= 5.0f;
-
 	__syncthreads();
 
-//	for (int yi = -1; yi < 2; yi++) {
-//		for (int xi = -1; xi < 2; xi++) {
-//			if (!(xi == 0 && yi == 0)) {
-//				res[0] += dots[x + xi][y + yi][0];
-//				res[1] += dots[x + xi][y + yi][1];
-//			}
-//		}
-//	}
-//
-//	res[0] /= 9;
-//	res[1] /= 9;
+	for (int yi = -1; yi < 2; yi++) {
+		for (int xi = -1; xi < 2; xi++) {
+			if (!(xi == 0 && yi == 0)) {
+				res[0] += dots[x + xi][y + yi][0];
+				res[1] += dots[x + xi][y + yi][1];
+			}
+		}
+	}
+
+	res[0] /= 9;
+	res[1] /= 9;
 }
 
-// copy input data to shared memory
-__device__ void copyToSharedMem(float* inDots) {
+// thomas
+__device__ void copyToSharedMem_thomas(float* inDots) {
 
-	int offset   = getArrayOffset();
+	int offset = getArrayOffset();
+	int offsetAbove = getArrayOffsetAbove();
+	int offsetBelow = getArrayOffsetBelow();
 
 	int x = threadIdx.x % 32 + 1; // thread x-coordinate inside block
 	int y = threadIdx.y % 32 + 1; // thread y-coordinate inside block
@@ -112,16 +102,16 @@ __device__ void copyToSharedMem(float* inDots) {
 			dots[x][y - 1][0] = initalValue;
 			dots[x][y - 1][1] = initalValue;
 		} else if (threadIdx.y == blockDim.y - 1) { // pixels from block below
-			dots[x][y + 1][0] = inDots[offset - gridDim.x * blockDim.x * 2];
-			dots[x][y + 1][1] = inDots[offset + 1 - gridDim.x * blockDim.x * 2 + 1];
+			dots[x][y + 1][0] = inDots[offsetBelow];
+			dots[x][y + 1][1] = inDots[offsetBelow + 1];
 		}
 	} else if (blockIdx.y == gridDim.y - 1) { // bottom border blocks
 		if (threadIdx.y == blockDim.y - 1) { // bottom border pixels
 			dots[x][y + 1][0] = initalValue;
 			dots[x][y + 1][1] = initalValue;
 		} else if (threadIdx.y == 0) { // pixels from block above
-			dots[x][y - 1][0] = inDots[offset + gridDim.x * blockDim.x * 2];
-			dots[x][y - 1][1] = inDots[offset + 1 + gridDim.x * blockDim.x * 2 + 1];
+			dots[x][y - 1][0] = inDots[offsetAbove];
+			dots[x][y - 1][1] = inDots[offsetAbove + 1];
 		}
 	} else if (blockIdx.x == 0) { // left border blocks
 		if (threadIdx.x == 0) { // left border pixels
@@ -144,11 +134,11 @@ __device__ void copyToSharedMem(float* inDots) {
 	// all non-border blocks
 	if (!isBorder) {
 		if (threadIdx.y == 0) { // top pixels
-			dots[x][y - 1][0] = inDots[offset + gridDim.x * blockDim.x * 2];
-			dots[x][y - 1][1] = inDots[offset + 1 + gridDim.x * blockDim.x * 2 + 1];
+			dots[x][y - 1][0] = inDots[offsetAbove];
+			dots[x][y - 1][1] = inDots[offsetAbove + 1];
 		} else if (threadIdx.y == blockDim.y - 1) { // bottom pixels
-			dots[x][y + 1][0] = inDots[offset - gridDim.x * blockDim.x * 2];
-			dots[x][y + 1][1] = inDots[offset + 1 - gridDim.x * blockDim.x * 2 + 1];
+			dots[x][y + 1][0] = inDots[offsetBelow];
+			dots[x][y + 1][1] = inDots[offsetBelow + 1];
 		} else if (threadIdx.x == 0) { // left pixels
 			dots[x - 1][y][0] = inDots[offset - 2];
 			dots[x - 1][y][1] = inDots[offset + 1 - 2];
@@ -161,11 +151,108 @@ __device__ void copyToSharedMem(float* inDots) {
 	__syncthreads();
 }
 
+// copy input data to shared memory
+__device__  void copyToSharedMem(float* inDots){
+
+	int x1 = threadIdx.x  ;
+	int y1 = threadIdx.y  ;
+
+	float initalValue = 0.0f;
+
+	//dots[x1+1][y1+1][0] = inDots[threadID * 2];
+	//dots[x1+1][y1+1][1] = inDots[threadID * 2 + 1];
+
+	int xPos=blockIdx.x*blockDim.x*2+x1;
+
+
+	dots[x1/2+1][y1+1][x1%2]=inDots[(blockIdx.y*32+y1)*GESAMTBREITE+xPos];
+	dots[x1/2+1+16][y1+1][x1%2]=inDots[(blockIdx.y*32+y1)*GESAMTBREITE+xPos+32];
+
+	/*dots[x1/2+1][y1+1][x1%2]=1;
+	dots[x1/2+1+16][y1+1][x1%2]=1;*/
+
+	// Wir befinden uns nicht in der ersten Reihe
+	if(blockIdx.y!=0){
+		if(y1==0 )
+			dots[x1/2+1][0][x1%2]=inDots[(blockIdx.y*32-1)*GESAMTBREITE+xPos];
+		else if(y1==1)
+			dots[x1/2+1+16][0][x1%2]=inDots[(blockIdx.y*32-1)*GESAMTBREITE+xPos+32];
+		else if(y1==2 && (x1==0 || x1==1))
+			dots[0][0][(x1+1)%2]=blockIdx.x!=0 ? inDots[(blockIdx.y*32-1)*GESAMTBREITE+xPos-(x1*2+1)] : initalValue;
+		else if(y1==3 && (x1==0 || x1==1))
+			dots[33][0][x1]= blockIdx.x!=(512/32-1) ? inDots[(blockIdx.y*32-1)*GESAMTBREITE+xPos+(32*2)] : initalValue;
+	}
+	else{
+		if(y1==0 )
+			dots[x1/2+1][0][x1%2]=initalValue;
+		else if(y1==1)
+			dots[x1/2+1+16][0][x1%2]=initalValue;
+		else if(y1==2 && (x1==0 || x1==1))
+			dots[0][0][x1]=initalValue;
+		else if(y1==3 && (x1==0 || x1==1))
+			dots[33][0][x1]=initalValue;
+	}
+
+	// Nicht in der letzten Reihe hier kommt der access violation
+	if(blockIdx.y!=(512/32-1)){
+		if(y1==4 )
+			dots[x1/2+1][33][x1%2]=inDots[((blockIdx.y+1)*32)*GESAMTBREITE+xPos];
+		else if(y1==5)
+			dots[x1/2+1+16][33][x1%2]=inDots[((blockIdx.y+1)*32)*GESAMTBREITE+xPos+32];
+		else if(y1==6 && (x1==0 || x1==1))
+			dots[0][33][(x1+1)%2]=blockIdx.x!=0 ? inDots[((blockIdx.y+1)*32)*GESAMTBREITE+xPos-(x1*2+1)]: initalValue;
+		else if(y1==7 && (x1==0 || x1==1))
+			dots[33][33][x1]=blockIdx.x!=(512/32-1) ? inDots[((blockIdx.y+1)*32)*GESAMTBREITE+xPos+(32*2)] : initalValue;
+	}
+	else{
+		if(y1==4 )
+			dots[x1+1][33][0]=0;
+		else if(y1==5)
+			dots[x1+1][33][1]=0;
+		else if(y1==6 && (x1==0 || x1==1))
+			dots[0][33][x1]=0;
+		else if(y1==7 && (x1==0 || x1==1))
+			dots[33][33][x1]=0;
+	}
+
+	// Nicht erste Spalte
+	if(blockIdx.x!=0){
+		if(y1==8)
+			dots[0][x1/2+1][(x1+1)%2]=inDots[(blockIdx.y*32)*GESAMTBREITE+(x1/2)*GESAMTBREITE + blockIdx.x*64-(1+x1%2)];
+		if(y1==9)
+			dots[0][x1/2+1+16][(x1+1)%2]=inDots[(blockIdx.y*32)*GESAMTBREITE+(x1/2+16)*GESAMTBREITE + blockIdx.x*64-(1+x1%2)];
+
+	}
+	else{
+		if(y1==8)
+			dots[0][x1+1][0]=0;
+		if(y1==9)
+			dots[0][x1+1][1]=0;
+	}
+
+	// Nicht in der letzten Spalte
+	if(blockIdx.x!=(512/32-1)){
+		if(y1==10)
+			dots[33][x1/2+1][x1%2]=inDots[(blockIdx.y*32)*GESAMTBREITE+(x1/2)*GESAMTBREITE + blockIdx.x*64+ x1%2 +64];
+		if(y1==11)
+			dots[33][x1/2+1+16][x1%2]=inDots[(blockIdx.y*32)*GESAMTBREITE+(x1/2+16)*GESAMTBREITE + blockIdx.x*64+ x1%2 +64];
+	}
+	else{
+		if(y1==10)
+			dots[33][x1+1][0]=0;
+		if(y1==11)
+			dots[33][x1+1][1]=0;
+	}
+
+
+	__syncthreads();
+}
+
 // simulation function (will be called once per run loop)
 __global__ void simulate(float* inDots, float* outDots) {
 
 	int threadID = getGlobalThreadId();
-	int offset	 = getArrayOffset();
+	int offset = getArrayOffset();
 
 	copyToSharedMem(inDots);
 
