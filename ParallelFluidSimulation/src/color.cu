@@ -26,6 +26,8 @@
 __device__ void hsv2rgb(unsigned int hue, unsigned int sat, unsigned int val, unsigned char * r, unsigned char * g, unsigned char * b,
 		unsigned char maxBrightness) {
 
+	if (val > 255) val = 255;
+
 	unsigned int H_accent = hue / 60;
 	unsigned int bottom = ((255 - sat) * val) >> 8;
 	unsigned int top = val;

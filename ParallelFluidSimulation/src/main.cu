@@ -1,4 +1,4 @@
-#include <stdio.h>
+//#include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
 #include <unistd.h>
@@ -6,7 +6,6 @@
 #include "cpu_anim.cuh"
 #include "utils.cuh"
 #include "defines.cuh"
-
 #include "kernel_functions.cuh"
 
 #define BLOCK_WIDTH 32
@@ -17,7 +16,7 @@
 //#define _DEBUG_
 
 // KERNEL FIELDS >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-__shared__ Vector dots[BLOCK_WIDTH + 2][BLOCK_WIDTH + 2];
+__shared__ Vector sVelocityField[BLOCK_WIDTH + 2][BLOCK_WIDTH + 2];
 
 // KERNEL FUNCTIONS >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 // global threadID for 2D grid of 2D blocks
@@ -58,209 +57,134 @@ __device__ int getArrayOffsetBelow() {
 // simulate inside each block
 __device__ void calculateNewValue(float* res) {
 
-	int x = threadIdx.x % 32 + 1; // thread x-coordinate inside block
-	int y = threadIdx.y % 32 + 1; // thread y-coordinate inside block
+	int tidx = threadIdx.x + 1; // thread x-coordinate inside block
+	int tidy = threadIdx.y + 1; // thread y-coordinate inside block
 
-	res[0] = dots[x][y][0];
-	res[1] = dots[x][y][1];
+	if (blockIdx.y == 2 && blockIdx.x == 7) {
+		res[0] = 250000.0f;
+		res[1] = 250500.0f;
+	} else {
+		res[0] = sVelocityField[tidx][tidy][0];
+		res[1] = sVelocityField[tidx][tidy][1];
 
-	__syncthreads();
+		float weight = 1.0f;
 
-	for (int yi = -1; yi < 2; yi++) {
-		for (int xi = -1; xi < 2; xi++) {
-			if (!(xi == 0 && yi == 0)) {
-				res[0] += dots[x + xi][y + yi][0];
-				res[1] += dots[x + xi][y + yi][1];
-			}
-		}
+		for (int x = -1; x <= 1; x++)
+			for (int y = -1; y <= 1; y++)
+				if (x != 0 && y != 0) {
+					float angle = getAngleBetween(x, y, sVelocityField[tidx + x][tidy + y][0], sVelocityField[tidx + x][tidy + y][1]);
+					float currentWeight = (1.5f - angle / 90.0f);
+					res[0] += currentWeight * sVelocityField[tidx + x][tidy + y][0];
+					res[1] += currentWeight * sVelocityField[tidx + x][tidy + y][1];
+					weight += currentWeight;
+				}
+
+		res[0] /= weight;
+		res[1] /= weight;
 	}
-
-	res[0] /= 9;
-	res[1] /= 9;
-}
-
-// thomas
-__device__ void copyToSharedMem_thomas(float* inDots) {
-
-	int offset = getArrayOffset();
-	int offsetAbove = getArrayOffsetAbove();
-	int offsetBelow = getArrayOffsetBelow();
-
-	int x = threadIdx.x % 32 + 1; // thread x-coordinate inside block
-	int y = threadIdx.y % 32 + 1; // thread y-coordinate inside block
-
-	dots[x][y][0] = inDots[offset];		// copy x-values from global to shared memory
-	dots[x][y][1] = inDots[offset + 1];	// copy y-values from global to shared memory
-
-	__syncthreads();
-
-	bool isBorder = blockIdx.y == 0 || blockIdx.y == gridDim.y - 1 || blockIdx.x == 0 || blockIdx.x == gridDim.x - 1;
-	float initalValue = 0.0f; // initial value for border-pixels
-
-	if (blockIdx.y == 0) { // top border blocks
-		if (threadIdx.y == 0) { // top border pixels
-			dots[x][y - 1][0] = initalValue;
-			dots[x][y - 1][1] = initalValue;
-		} else if (threadIdx.y == blockDim.y - 1) { // pixels from block below
-			dots[x][y + 1][0] = inDots[offsetBelow];
-			dots[x][y + 1][1] = inDots[offsetBelow + 1];
-		}
-	} else if (blockIdx.y == gridDim.y - 1) { // bottom border blocks
-		if (threadIdx.y == blockDim.y - 1) { // bottom border pixels
-			dots[x][y + 1][0] = initalValue;
-			dots[x][y + 1][1] = initalValue;
-		} else if (threadIdx.y == 0) { // pixels from block above
-			dots[x][y - 1][0] = inDots[offsetAbove];
-			dots[x][y - 1][1] = inDots[offsetAbove + 1];
-		}
-	} else if (blockIdx.x == 0) { // left border blocks
-		if (threadIdx.x == 0) { // left border pixels
-			dots[x - 1][y][0] = initalValue;
-			dots[x - 1][y][1] = initalValue;
-		} else if (threadIdx.x == blockDim.x - 1) { // pixels from right-side block
-			dots[x + 1][y][0] = inDots[offset + 2];
-			dots[x + 1][y][1] = inDots[offset + 1 + 2];
-		}
-	} else if (blockIdx.x == gridDim.x - 1) { // right border blocks
-		if (threadIdx.x == blockDim.x - 1) { // right border pixels
-			dots[x + 1][y][0] = initalValue;
-			dots[x + 1][y][1] = initalValue;
-		} else if (threadIdx.x == 0) { // pixels from left-side block
-			dots[x - 1][y][0] = inDots[offset - 2];
-			dots[x - 1][y][1] = inDots[offset + 1 - 2];
-		}
-	}
-
-	// all non-border blocks
-	if (!isBorder) {
-		if (threadIdx.y == 0) { // top pixels
-			dots[x][y - 1][0] = inDots[offsetAbove];
-			dots[x][y - 1][1] = inDots[offsetAbove + 1];
-		} else if (threadIdx.y == blockDim.y - 1) { // bottom pixels
-			dots[x][y + 1][0] = inDots[offsetBelow];
-			dots[x][y + 1][1] = inDots[offsetBelow + 1];
-		} else if (threadIdx.x == 0) { // left pixels
-			dots[x - 1][y][0] = inDots[offset - 2];
-			dots[x - 1][y][1] = inDots[offset + 1 - 2];
-		} else if (threadIdx.x == blockDim.x - 1) { // right pixels
-			dots[x + 1][y][0] = inDots[offset + 2];
-			dots[x + 1][y][1] = inDots[offset + 1 + 2];
-		}
-	}
-
-	__syncthreads();
 }
 
 // copy input data to shared memory
-__device__  void copyToSharedMem(float* inDots){
+__device__ void copyToSharedMem(float* inVelocityField) {
 
-	int x1 = threadIdx.x  ;
-	int y1 = threadIdx.y  ;
+	int x = threadIdx.x;
+	int y = threadIdx.y;
 
-	float initalValue = 0.0f;
+	float initalBorderValue = 0.0f;
 
-	//dots[x1+1][y1+1][0] = inDots[threadID * 2];
-	//dots[x1+1][y1+1][1] = inDots[threadID * 2 + 1];
+	int xPos = blockIdx.x * blockDim.x * 2 + x;
 
-	int xPos=blockIdx.x*blockDim.x*2+x1;
+	sVelocityField[x / 2 + 1][y + 1][x % 2] = inVelocityField[(blockIdx.y * 32 + y) * GESAMTBREITE + xPos];
+	sVelocityField[x / 2 + 1 + 16][y + 1][x % 2] = inVelocityField[(blockIdx.y * 32 + y) * GESAMTBREITE + xPos + 32];
 
-
-	dots[x1/2+1][y1+1][x1%2]=inDots[(blockIdx.y*32+y1)*GESAMTBREITE+xPos];
-	dots[x1/2+1+16][y1+1][x1%2]=inDots[(blockIdx.y*32+y1)*GESAMTBREITE+xPos+32];
-
-	/*dots[x1/2+1][y1+1][x1%2]=1;
-	dots[x1/2+1+16][y1+1][x1%2]=1;*/
-
-	// Wir befinden uns nicht in der ersten Reihe
-	if(blockIdx.y!=0){
-		if(y1==0 )
-			dots[x1/2+1][0][x1%2]=inDots[(blockIdx.y*32-1)*GESAMTBREITE+xPos];
-		else if(y1==1)
-			dots[x1/2+1+16][0][x1%2]=inDots[(blockIdx.y*32-1)*GESAMTBREITE+xPos+32];
-		else if(y1==2 && (x1==0 || x1==1))
-			dots[0][0][(x1+1)%2]=blockIdx.x!=0 ? inDots[(blockIdx.y*32-1)*GESAMTBREITE+xPos-(x1*2+1)] : initalValue;
-		else if(y1==3 && (x1==0 || x1==1))
-			dots[33][0][x1]= blockIdx.x!=(512/32-1) ? inDots[(blockIdx.y*32-1)*GESAMTBREITE+xPos+(32*2)] : initalValue;
-	}
-	else{
-		if(y1==0 )
-			dots[x1/2+1][0][x1%2]=initalValue;
-		else if(y1==1)
-			dots[x1/2+1+16][0][x1%2]=initalValue;
-		else if(y1==2 && (x1==0 || x1==1))
-			dots[0][0][x1]=initalValue;
-		else if(y1==3 && (x1==0 || x1==1))
-			dots[33][0][x1]=initalValue;
+	// not in first row
+	if (blockIdx.y != 0) {
+		if (y == 0)
+			sVelocityField[x / 2 + 1][0][x % 2] = inVelocityField[(blockIdx.y * 32 - 1) * GESAMTBREITE + xPos];
+		else if (y == 1)
+			sVelocityField[x / 2 + 1 + 16][0][x % 2] = inVelocityField[(blockIdx.y * 32 - 1) * GESAMTBREITE + xPos + 32];
+		else if (y == 2 && (x == 0 || x == 1))
+			sVelocityField[0][0][(x + 1) % 2] = blockIdx.x != 0 ? inVelocityField[(blockIdx.y * 32 - 1) * GESAMTBREITE + xPos - (x * 2 + 1)] : initalBorderValue;
+		else if (y == 3 && (x == 0 || x == 1))
+			sVelocityField[33][0][x] = blockIdx.x != (512 / 32 - 1) ? inVelocityField[(blockIdx.y * 32 - 1) * GESAMTBREITE + xPos + (32 * 2)] : initalBorderValue;
+	} else {
+		if (y == 0)
+			sVelocityField[x / 2 + 1][0][x % 2] = initalBorderValue;
+		else if (y == 1)
+			sVelocityField[x / 2 + 1 + 16][0][x % 2] = initalBorderValue;
+		else if (y == 2 && (x == 0 || x == 1))
+			sVelocityField[0][0][x] = initalBorderValue;
+		else if (y == 3 && (x == 0 || x == 1))
+			sVelocityField[33][0][x] = initalBorderValue;
 	}
 
-	// Nicht in der letzten Reihe hier kommt der access violation
-	if(blockIdx.y!=(512/32-1)){
-		if(y1==4 )
-			dots[x1/2+1][33][x1%2]=inDots[((blockIdx.y+1)*32)*GESAMTBREITE+xPos];
-		else if(y1==5)
-			dots[x1/2+1+16][33][x1%2]=inDots[((blockIdx.y+1)*32)*GESAMTBREITE+xPos+32];
-		else if(y1==6 && (x1==0 || x1==1))
-			dots[0][33][(x1+1)%2]=blockIdx.x!=0 ? inDots[((blockIdx.y+1)*32)*GESAMTBREITE+xPos-(x1*2+1)]: initalValue;
-		else if(y1==7 && (x1==0 || x1==1))
-			dots[33][33][x1]=blockIdx.x!=(512/32-1) ? inDots[((blockIdx.y+1)*32)*GESAMTBREITE+xPos+(32*2)] : initalValue;
-	}
-	else{
-		if(y1==4 )
-			dots[x1+1][33][0]=0;
-		else if(y1==5)
-			dots[x1+1][33][1]=0;
-		else if(y1==6 && (x1==0 || x1==1))
-			dots[0][33][x1]=0;
-		else if(y1==7 && (x1==0 || x1==1))
-			dots[33][33][x1]=0;
-	}
-
-	// Nicht erste Spalte
-	if(blockIdx.x!=0){
-		if(y1==8)
-			dots[0][x1/2+1][(x1+1)%2]=inDots[(blockIdx.y*32)*GESAMTBREITE+(x1/2)*GESAMTBREITE + blockIdx.x*64-(1+x1%2)];
-		if(y1==9)
-			dots[0][x1/2+1+16][(x1+1)%2]=inDots[(blockIdx.y*32)*GESAMTBREITE+(x1/2+16)*GESAMTBREITE + blockIdx.x*64-(1+x1%2)];
-
-	}
-	else{
-		if(y1==8)
-			dots[0][x1+1][0]=0;
-		if(y1==9)
-			dots[0][x1+1][1]=0;
+	// not in last row (?) access violation (?)
+	if (blockIdx.y != (512 / 32 - 1)) {
+		if (y == 4)
+			sVelocityField[x / 2 + 1][33][x % 2] = inVelocityField[((blockIdx.y + 1) * 32) * GESAMTBREITE + xPos];
+		else if (y == 5)
+			sVelocityField[x / 2 + 1 + 16][33][x % 2] = inVelocityField[((blockIdx.y + 1) * 32) * GESAMTBREITE + xPos + 32];
+		else if (y == 6 && (x == 0 || x == 1))
+			sVelocityField[0][33][(x + 1) % 2] = blockIdx.x != 0 ? inVelocityField[((blockIdx.y + 1) * 32) * GESAMTBREITE + xPos - (x * 2 + 1)] : initalBorderValue;
+		else if (y == 7 && (x == 0 || x == 1))
+			sVelocityField[33][33][x] = blockIdx.x != (512 / 32 - 1) ? inVelocityField[((blockIdx.y + 1) * 32) * GESAMTBREITE + xPos + (32 * 2)] : initalBorderValue;
+	} else {
+		if (y == 4)
+			sVelocityField[x + 1][33][0] = 0;
+		else if (y == 5)
+			sVelocityField[x + 1][33][1] = 0;
+		else if (y == 6 && (x == 0 || x == 1))
+			sVelocityField[0][33][x] = 0;
+		else if (y == 7 && (x == 0 || x == 1))
+			sVelocityField[33][33][x] = 0;
 	}
 
-	// Nicht in der letzten Spalte
-	if(blockIdx.x!=(512/32-1)){
-		if(y1==10)
-			dots[33][x1/2+1][x1%2]=inDots[(blockIdx.y*32)*GESAMTBREITE+(x1/2)*GESAMTBREITE + blockIdx.x*64+ x1%2 +64];
-		if(y1==11)
-			dots[33][x1/2+1+16][x1%2]=inDots[(blockIdx.y*32)*GESAMTBREITE+(x1/2+16)*GESAMTBREITE + blockIdx.x*64+ x1%2 +64];
-	}
-	else{
-		if(y1==10)
-			dots[33][x1+1][0]=0;
-		if(y1==11)
-			dots[33][x1+1][1]=0;
+	// not in first column
+	if (blockIdx.x != 0) {
+		if (y1 == 8)
+			sVelocityField[0][x / 2 + 1][(x + 1) % 2] = inVelocityField[(blockIdx.y * 32) * GESAMTBREITE + (x / 2) * GESAMTBREITE + blockIdx.x * 64
+					- (1 + x % 2)];
+		if (y == 9)
+			sVelocityField[0][x / 2 + 1 + 16][(x + 1) % 2] = inVelocityField[(blockIdx.y * 32) * GESAMTBREITE + (x / 2 + 16) * GESAMTBREITE + blockIdx.x * 64
+					- (1 + x % 2)];
+
+	} else {
+		if (y == 8)
+			sVelocityField[0][x + 1][0] = 0;
+		if (y == 9)
+			sVelocityField[0][x + 1][1] = 0;
 	}
 
+	// not in last column
+	if (blockIdx.x != (512 / 32 - 1)) {
+		if (y1 == 10)
+			sVelocityField[33][x / 2 + 1][x % 2] =
+					inVelocityField[(blockIdx.y * 32) * GESAMTBREITE + (x / 2) * GESAMTBREITE + blockIdx.x * 64 + x % 2 + 64];
+		if (y == 11)
+			sVelocityField[33][x / 2 + 1 + 16][x % 2] = inVelocityField[(blockIdx.y * 32) * GESAMTBREITE + (x / 2 + 16) * GESAMTBREITE + blockIdx.x * 64
+					+ x % 2 + 64];
+	} else {
+		if (y == 10)
+			sVelocityField[33][x + 1][0] = 0;
+		if (y == 11)
+			sVelocityField[33][x + 1][1] = 0;
+	}
 
 	__syncthreads();
 }
 
 // simulation function (will be called once per run loop)
-__global__ void simulate(float* inDots, float* outDots) {
+__global__ void simulate(float* inVelocityField, float* outVelocityField) {
 
-	int threadID = getGlobalThreadId();
 	int offset = getArrayOffset();
 
-	copyToSharedMem(inDots);
+	copyToSharedMem(inVelocityField);
 
 	float res[2];
 	calculateNewValue(res);
 
-	outDots[offset] = res[0];
-	outDots[offset + 1] = res[1];
+	outVelocityField[offset] = res[0];
+	outVelocityField[offset + 1] = res[1];
 }
 
 // ANIMATION FUNCTIONS >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
@@ -293,7 +217,7 @@ int main(void) {
 	printf("Starting CUDA-Application - Parallel Fluid Simulation ...\n");
 
 	// initialize data field which will be used for all further calculation
-	Vector* vectorField = new Vector[SIM_HEIGHT * SIM_WIDTH];
+	Vector* velocityField = new Vector[SIM_HEIGHT * SIM_WIDTH];
 
 	// set up stuff for graphical output
 	DataBlock dataBlock;
@@ -313,12 +237,15 @@ int main(void) {
 		float yValue = sin(((float) i / (SIM_WIDTH * SIM_HEIGHT - 1)) * 2 * M_PI);
 
 		// assign to vectorField
-		vectorField[i][0] = xValue;
-		vectorField[i][1] = yValue;
+		velocityField[i][0] = 0;
+		velocityField[i][1] = 0;
 	}
 
+//	vectorField[90000][0] = 25000;
+//	vectorField[90000][1] = 0;
+
 	// copy input values to device
-	cudaMemcpy(dataBlock.dev_inSrc, vectorField, imageSize * 2, cudaMemcpyHostToDevice);
+	cudaMemcpy(dataBlock.dev_inSrc, velocityField, imageSize * 2, cudaMemcpyHostToDevice);
 
 	// start simulation
 	animBitmap.anim_and_exit((void (*)(void*, int)) anim_gpu, (void (*)(void*))anim_exit );
