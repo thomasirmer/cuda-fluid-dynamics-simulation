@@ -11,6 +11,11 @@
 #define SIM_WIDTH  512
 #define SIM_HEIGHT 512
 
+#define BLOCK_WIDTH 32
+
+#define BLOCKBREITE  BLOCK_WIDTH
+#define GESAMTBREITE 1024
+
 // native data structure
 typedef float Vector[2];
 
