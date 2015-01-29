@@ -26,7 +26,6 @@ __shared__ Vector sDots[BLOCK_WIDTH + 2][BLOCK_WIDTH + 2];
 __device__ int getGlobalThreadId() {
 	int blockId = blockIdx.x + blockIdx.y * gridDim.x;
 	int threadId = blockId * (blockDim.x * blockDim.y) + (threadIdx.y * blockDim.x) + threadIdx.x;
-
 	return threadId;
 }
 
@@ -85,7 +84,7 @@ __device__ float getWeightByAngle(float angle) {
 }
 
 // simulate inside each block
-__device__ void calculateNewValue(float* newValues, int tickForConst) {
+__device__ void calculateNewValue(float* newValues) {
 
 	int tidx = threadIdx.x + 1; // thread x-coordinate inside block
 	int tidy = threadIdx.y + 1; // thread y-coordinate inside block
@@ -112,23 +111,26 @@ __device__ void calculateNewValue(float* newValues, int tickForConst) {
 		for (int x = -1; x <= 1; x++) {
 			for (int y = -1; y <= 1; y++) {
 				if (x != 0 && y != 0) {
-					float angle = getAngleBetween(-x, -y, sDots[tidx + x][tidy + y][0], sDots[tidx + x][tidy + y][1]);
+					float neighborX = sDots[tidx + x][tidy + y][0];
+					float neighborY = sDots[tidx + x][tidy + y][1];
+
+					float angle = getAngleBetween(-x, -y, neighborX, neighborY);
 
 					// add x-y-values of neighbor pixels
 					float currentWeight = (1.5 - abs(angle) / 180.0f);
-					newValues[0] += currentWeight * sDots[tidx + x][tidy + y][0];
-					newValues[1] += currentWeight * sDots[tidx + x][tidy + y][1];
+					newValues[0] += currentWeight * neighborX;
+					newValues[1] += currentWeight * neighborY;
 					weight += currentWeight;
 
 					// rotate based on direction of neighbor pixels
 					float relativeAngle = 0.0f;
-					if (getVectorLength(sDots[tidx + x][tidy + y][0], sDots[tidx + x][tidy + y][1]) >= 0.0f + FLT_EPSILON) {
-						relativeAngle = getAngleBetween(newValues[0], newValues[1], sDots[tidx + x][tidy + y][0],
-													sDots[tidx + x][tidy + y][1]);
+					if (getVectorLength(neighborX, neighborY) >= 0.0f + FLT_EPSILON) {
+						relativeAngle = getAngleBetween(newValues[0], newValues[1], neighborX, neighborY);
 					}
 					float rotationSpeed = 0.1f; //getVectorLength(sDots[tidx + x][tidy + y][0], sDots[tidx + x][tidy + y][1]);
-					float cosinus = cos(relativeAngle * rotationSpeed / 180.0f * M_PI);
-					float sinus = sin(relativeAngle * rotationSpeed / 180.0f * M_PI);
+					float rotationAngle = relativeAngle * rotationSpeed / 180.0f * M_PI;
+					float cosinus = cos(rotationAngle);
+					float sinus = sin(rotationAngle);
 					newValues[0] = (newValues[0] * cosinus - newValues[1] * sinus);
 					newValues[1] = (newValues[0] * sinus + newValues[1] * cosinus);
 				}
@@ -241,16 +243,12 @@ __device__ void copyToSharedMem(float* inVelocityField) {
 }
 
 // simulation function (will be called once per run loop)
-__global__ void simulate(float* inVelocityField, float* outVelocityField, int tickForConstant) {
+__global__ void simulate(float* inVelocityField, float* outVelocityField) {
 
 	int offset = getArrayOffset();
-
 	copyToSharedMem(inVelocityField);
-
 	float newValues[2];
-
-	calculateNewValue(newValues, tickForConstant);
-
+	calculateNewValue(newValues);
 	outVelocityField[offset] = newValues[0];
 	outVelocityField[offset + 1] = newValues[1];
 }
@@ -268,38 +266,13 @@ void anim_exit(DataBlock *d) {
 	cudaFree(d->output_bitmap);
 }
 
-// file write
-void writeToFile(float* array) {
-	std::ofstream myFile;
-	myFile.open("debugOutput.txt");
-
-	for (int i = 0; i < 512; i++) {
-		for (int j = 0; j < 1024; j++) {
-			myFile << array[i * 1024 + j] << " ";
-		}
-		myFile << std::endl;
-	}
-	myFile.close();
-	getchar();
-}
-
 // animation run-loop function
 void anim_gpu(DataBlock *d, int ticks) {
 	dim3 blocks(ceil(SIM_WIDTH / BLOCK_WIDTH), ceil(SIM_HEIGHT / BLOCK_WIDTH));
 	dim3 threads(BLOCK_WIDTH, BLOCK_WIDTH);
 	CPUAnimBitmap* bitmap = d->bitmap;
 
-	static int tickForConstant = 0;
-	simulate<<<blocks, threads>>>(d->dev_inSrc, d->dev_outSrc, tickForConstant);
-	tickForConstant++;
-
-//	static int fileWrite = 90;
-//	static float* output = new float[1024 * 512];
-//	if (fileWrite++ % 100 == 0) {
-//		cudaMemcpy(output, d->dev_outSrc, 1024 * 512 * sizeof(float), cudaMemcpyDeviceToHost);
-//		writeToFile(output);
-//	}
-
+	simulate<<<blocks, threads>>>(d->dev_inSrc, d->dev_outSrc);
 	float_to_color<<<blocks, threads>>>(d->output_bitmap, d->dev_outSrc);
 	swap(d->dev_inSrc, d->dev_outSrc);
 	cudaMemcpy(bitmap->get_ptr(), d->output_bitmap, bitmap->image_size(), cudaMemcpyDeviceToHost);

@@ -16,27 +16,13 @@ __device__ float getVectorAngle(float xCoord, float yCoord) {
 __device__ float getAngleBetween(float x1, float y1, float x2, float y2) {
 
 	// normalize vectors
-	float lenght1 = sqrt(x1 * x1 + y1 * y1);
-	float normX1;
-	float normY1;
-	if (lenght1 <= 0.0f + FLT_EPSILON) {
-		normX1 = 0;
-		normY1 = 0;
-	} else {
-		normX1 = x1 / lenght1;
-		normY1 = y1 / lenght1;
-	}
+	float lenght1 = sqrt(x1 * x1 + y1 * y1) + FLT_EPSILON;
+	float normX1 = x1 / lenght1;
+	float normY1 = y1 / lenght1;
 
-	float lenght2 = sqrt(x2 * x2 + y2 * y2);
-	float normX2;
-	float normY2;
-	if (lenght2 <= 0.0f + FLT_EPSILON) {
-		normX2 = 0;
-		normY2 = 0;
-	} else {
-		normX2 = x2 / lenght2;
-		normY2 = y2 / lenght2;
-	}
+	float lenght2 = sqrt(x2 * x2 + y2 * y2) + FLT_EPSILON;
+	float normX2 = x2 / lenght2;
+	float normY2 = y2 / lenght2;
 
 	// calculate angle
 	float angle = (atan2(normY2, normX2) - atan2(normY1, normX1)) / M_PI * 180.0f;
