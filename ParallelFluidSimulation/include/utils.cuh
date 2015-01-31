@@ -98,35 +98,57 @@ __global__ void float_to_color(unsigned char *outBitmap, const float* vectorValu
 	}
 }
 
-__global__ void float_to_color(uchar4 *optr, const float *outSrc) {
-	// map from threadIdx/BlockIdx to pixel position
-	int x = threadIdx.x + blockIdx.x * blockDim.x;
-	int y = threadIdx.y + blockIdx.y * blockDim.y;
-	int offset = x + y * blockDim.x * gridDim.x;
+void float_to_color_serial(unsigned char *outBitmap, const float* vectorValues) {
 
-	float l = outSrc[offset];
-	float s = 1;
-	int h = (180 + (int) (360.0f * outSrc[offset])) % 360;
-	float m1, m2;
+	for (int y = 0; y < SIM_HEIGHT; y++)
+		for (int x = 0; x < SIM_WIDTH; x++) {
+			float xValue = vectorValues[(y * SIM_WIDTH + x) * 2];
+			float yValue = vectorValues[(y * SIM_WIDTH + x) * 2 + 1];
 
-	if (l <= 0.5f)
-		m2 = l * (1 + s);
-	else
-		m2 = l + s - l * s;
-	m1 = 2 * l - m2;
+			float angleRad = getVectorAngleSerial(xValue, yValue);
+			unsigned int angleDeg = (unsigned int) round(angleRad + 180.0f);
+			unsigned int length = (unsigned int) floor(getVectorLengthSerial(xValue, yValue) * 255);
 
-	optr[offset].x = value(m1, m2, h + 120);
-	optr[offset].y = value(m1, m2, h);
-	optr[offset].z = value(m1, m2, h - 120);
-	optr[offset].w = 255;
+			unsigned char red, green, blue;
+			hsv2rgbSerial(angleDeg, 255, length, &red, &green, &blue, 255);
+
+			// red - green - blue - (?) alpha (?)
+			outBitmap[(y * SIM_WIDTH + x) * 4 + 0] = red;
+			outBitmap[(y * SIM_WIDTH + x) * 4 + 1] = green;
+			outBitmap[(y * SIM_WIDTH + x) * 4 + 2] = blue;
+			outBitmap[(y * SIM_WIDTH + x) * 4 + 3] = 255;
+		}
 }
+
+		__global__ void float_to_color(uchar4 *optr, const float *outSrc) {
+			// map from threadIdx/BlockIdx to pixel position
+			int x = threadIdx.x + blockIdx.x * blockDim.x;
+			int y = threadIdx.y + blockIdx.y * blockDim.y;
+			int offset = x + y * blockDim.x * gridDim.x;
+
+			float l = outSrc[offset];
+			float s = 1;
+			int h = (180 + (int) (360.0f * outSrc[offset])) % 360;
+			float m1, m2;
+
+			if (l <= 0.5f)
+				m2 = l * (1 + s);
+			else
+				m2 = l + s - l * s;
+			m1 = 2 * l - m2;
+
+			optr[offset].x = value(m1, m2, h + 120);
+			optr[offset].y = value(m1, m2, h);
+			optr[offset].z = value(m1, m2, h - 120);
+			optr[offset].w = 255;
+		}
 
 #if _WIN32
 //Windows threads.
 #include <windows.h>
 
-typedef HANDLE CUTThread;
-typedef unsigned (WINAPI *CUT_THREADROUTINE)(void *);
+		typedef HANDLE CUTThread;
+		typedef unsigned (WINAPI *CUT_THREADROUTINE)(void *);
 
 #define CUT_THREADPROC unsigned WINAPI
 #define  CUT_THREADEND return 0
@@ -135,74 +157,74 @@ typedef unsigned (WINAPI *CUT_THREADROUTINE)(void *);
 //POSIX threads.
 #include <pthread.h>
 
-typedef pthread_t CUTThread;
-typedef void *(*CUT_THREADROUTINE)(void *);
+		typedef pthread_t CUTThread;
+		typedef void *(*CUT_THREADROUTINE)(void *);
 
 #define CUT_THREADPROC void
 #define  CUT_THREADEND
 #endif
 
 //Create thread.
-CUTThread start_thread(CUT_THREADROUTINE, void *data);
+		CUTThread start_thread(CUT_THREADROUTINE, void *data);
 
 //Wait for thread to finish.
-void end_thread(CUTThread thread);
+		void end_thread(CUTThread thread);
 
 //Destroy thread.
-void destroy_thread(CUTThread thread);
+		void destroy_thread(CUTThread thread);
 
 //Wait for multiple threads.
-void wait_for_threads(const CUTThread *threads, int num);
+		void wait_for_threads(const CUTThread *threads, int num);
 
 #if _WIN32
 //Create thread
-CUTThread start_thread(CUT_THREADROUTINE func, void *data) {
-	return CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)func, data, 0, NULL);
-}
+		CUTThread start_thread(CUT_THREADROUTINE func, void *data) {
+			return CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)func, data, 0, NULL);
+		}
 
 //Wait for thread to finish
-void end_thread(CUTThread thread) {
-	WaitForSingleObject(thread, INFINITE);
-	CloseHandle(thread);
-}
+		void end_thread(CUTThread thread) {
+			WaitForSingleObject(thread, INFINITE);
+			CloseHandle(thread);
+		}
 
 //Destroy thread
-void destroy_thread( CUTThread thread ) {
-	TerminateThread(thread, 0);
-	CloseHandle(thread);
-}
+		void destroy_thread( CUTThread thread ) {
+			TerminateThread(thread, 0);
+			CloseHandle(thread);
+		}
 
 //Wait for multiple threads
-void wait_for_threads(const CUTThread * threads, int num) {
-	WaitForMultipleObjects(num, threads, true, INFINITE);
+		void wait_for_threads(const CUTThread * threads, int num) {
+			WaitForMultipleObjects(num, threads, true, INFINITE);
 
-	for(int i = 0; i < num; i++)
-	CloseHandle(threads[i]);
-}
+			for(int i = 0; i < num; i++)
+			CloseHandle(threads[i]);
+		}
 
 #else
 //Create thread
-CUTThread start_thread(CUT_THREADROUTINE func, void * data) {
-	pthread_t thread;
-	pthread_create(&thread, NULL, func, data);
-	return thread;
-}
+		CUTThread start_thread(CUT_THREADROUTINE func, void * data) {
+			pthread_t thread;
+			pthread_create(&thread, NULL, func, data);
+			return thread;
+		}
 
 //Wait for thread to finish
-void end_thread(CUTThread thread) {
-	pthread_join(thread, NULL);
-}
+		void end_thread(CUTThread thread) {
+			pthread_join(thread, NULL);
+		}
 
 //Destroy thread
-void destroy_thread(CUTThread thread) {
-	pthread_cancel(thread);
-}
+		void destroy_thread(CUTThread thread) {
+			pthread_cancel(thread);
+		}
 
 //Wait for multiple threads
-void wait_for_threads(const CUTThread * threads, int num) {
-	for (int i = 0; i < num; i++)
-		end_thread(threads[i]);
-}
+		void wait_for_threads(const CUTThread * threads, int num) {
+			for (int i = 0; i < num; i++)
+				end_thread(threads[i]);
+		}
 
 #endif
 

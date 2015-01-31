@@ -19,7 +19,7 @@
 __shared__ Vector sDots[BLOCK_WIDTH + 2][BLOCK_WIDTH + 2];
 
 // ****************************************************************************
-// KERNEL FUNCTIONS
+// KERNEL FUNCTIONS (PARALLEL EXECUTION)
 // ****************************************************************************
 
 // global threadID for 2D grid of 2D blocks
@@ -36,51 +36,6 @@ __device__ int getArrayOffset() {
 	int offset = (xOffset + yOffset * blockDim.x * gridDim.x) * 2;
 
 	return offset;
-}
-
-// navier-stokes diffusion
-__device__ void diffusion(float* newValues) {
-	int tidx = threadIdx.x + 1; // thread x-coordinate inside block
-	int tidy = threadIdx.y + 1; // thread y-coordinate inside block
-
-	const float k = 0.5f; // kinematic viscosity
-	const float dt = 1.0f; // timestep - for future use
-
-	newValues[0] = k * dt
-			* (sDots[tidx - 1][tidy][0] + sDots[tidx][tidy - 1][0] + sDots[tidx + 1][tidy][0] + sDots[tidx][tidy + 1][0]
-					- 4 * sDots[tidx][tidy][0]);
-
-	newValues[1] = k * dt
-			* (sDots[tidx - 1][tidy][1] + sDots[tidx][tidy - 1][1] + sDots[tidx + 1][tidy][1] + sDots[tidx][tidy + 1][1]
-					- 4 * sDots[tidx][tidy][1]);
-}
-
-// navier-stokes advection
-__device__ void advection(float* newValues) {
-	int tidx = threadIdx.x + 1; // thread x-coordinate inside block
-	int tidy = threadIdx.y + 1; // thread y-coordinate inside block
-
-	float dVelocityX = ((sDots[tidx - 1][tidy][0] - sDots[tidx + 1][tidy][0]) / 2)
-			+ ((sDots[tidx][tidy - 1][0] - sDots[tidx][tidy + 1][0]) / 2);
-
-	float dVelocityY = ((sDots[tidx - 1][tidy][1] - sDots[tidx + 1][tidy][1]) / 2)
-			+ ((sDots[tidx][tidy - 1][1] - sDots[tidx][tidy + 1][1]) / 2);
-
-	newValues[0] -= (sDots[tidx][tidy][0] * dVelocityX);
-	newValues[1] -= (sDots[tidx][tidy][1] * dVelocityY);
-}
-
-__device__ float getWeightByAngle(float angle) {
-	if (angle >= -180 && angle <= -90)
-		return (angle + 90) / -90;
-	if (angle >= -90 && angle <= 0)
-		return (angle + 90) / 90;
-	if (angle >= 0 && angle <= 90)
-		return (angle - 90) / -90;
-	if (angle >= 90 && angle <= 180)
-		return (angle - 90) / 90;
-	else
-		return 0;
 }
 
 // simulate inside each block
@@ -127,7 +82,7 @@ __device__ void calculateNewValue(float* newValues) {
 					if (getVectorLength(neighborX, neighborY) >= 0.0f + FLT_EPSILON) {
 						relativeAngle = getAngleBetween(newValues[0], newValues[1], neighborX, neighborY);
 					}
-					float rotationSpeed = 0.1f; //getVectorLength(sDots[tidx + x][tidy + y][0], sDots[tidx + x][tidy + y][1]);
+					float rotationSpeed = 0.1f;
 					float rotationAngle = relativeAngle * rotationSpeed / 180.0f * M_PI;
 					float cosinus = cos(rotationAngle);
 					float sinus = sin(rotationAngle);
@@ -243,14 +198,96 @@ __device__ void copyToSharedMem(float* inVelocityField) {
 }
 
 // simulation function (will be called once per run loop)
-__global__ void simulate(float* inVelocityField, float* outVelocityField) {
+__global__ void simulate(float* g_inVelocityField, float* g_outVelocityField) {
 
 	int offset = getArrayOffset();
-	copyToSharedMem(inVelocityField);
+	copyToSharedMem(g_inVelocityField);
 	float newValues[2];
 	calculateNewValue(newValues);
-	outVelocityField[offset] = newValues[0];
-	outVelocityField[offset + 1] = newValues[1];
+	g_outVelocityField[offset] = newValues[0];
+	g_outVelocityField[offset + 1] = newValues[1];
+}
+
+// ****************************************************************************
+// HOST FUNCTIONS (SERIAL EXECUTION)
+// ****************************************************************************
+
+float getPixelSerial(int x, int y, int pos, float* values) {
+
+	if (x < 0 || y < 0 || x >= SIM_WIDTH || y >= SIM_HEIGHT)
+		return 0;
+
+	return values[(y * SIM_WIDTH + x) * 2 + pos];
+}
+
+void calculateNewValuesSerial(float* inVelocityField, float* outVelocityField) {
+
+	Vector newValues;
+	float weight;
+
+	for (int yM = 0; yM < SIM_HEIGHT; yM++) {
+		for (int xM = 0; xM < SIM_WIDTH; xM++) {
+
+			if (yM / 32 == 2 && xM / 32 == 2) {
+				newValues[0] = 80.0f;
+				newValues[1] = 50.0f;
+			} else if (yM / 32 == 13 && xM / 32 == 3) {
+				newValues[0] = 60.0f;
+				newValues[1] = -70.0f;
+			} else if (yM / 32 == 2 && xM / 32 == 12) {
+				newValues[0] = -30.0f;
+				newValues[1] = 90.0f;
+			} else if (yM / 32 == 11 && xM / 32 == 10) {
+				newValues[0] = -70.0f;
+				newValues[1] = -70.0f;
+			} else {
+
+				weight = 1.0f;
+
+				newValues[0] = weight * getPixelSerial(xM, yM, 0, inVelocityField);
+				newValues[1] = weight * getPixelSerial(xM, yM, 1, inVelocityField);
+
+				for (int x = -1; x <= 1; x++) {
+					for (int y = -1; y <= 1; y++) {
+						if (x != 0 && y != 0) {
+
+							float neighborX = getPixelSerial(xM + x, yM + y, 0, inVelocityField);
+							float neighborY = getPixelSerial(xM + x, yM + y, 1, inVelocityField);
+
+							float angle = getAngleBetweenSerial(-x, -y, neighborX, neighborY);
+
+							// add x-y-inVelocityField of neighbor pixels
+							float currentWeight = (1.5 - abs(angle) / 180.0f);
+							newValues[0] += currentWeight * neighborX;
+							newValues[1] += currentWeight * neighborY;
+							weight += currentWeight;
+
+							// rotate based on direction of neighbor pixels
+							float relativeAngle = 0.0f;
+							if (getVectorLengthSerial(neighborX, neighborY) >= 0.0f + FLT_EPSILON) {
+								relativeAngle = getAngleBetweenSerial(newValues[0], newValues[1], neighborX, neighborY);
+							}
+							float rotationSpeed = 0.1f;
+							float rotationAngle = relativeAngle * rotationSpeed / 180.0f * M_PI;
+							float cosinus = cos(rotationAngle);
+							float sinus = sin(rotationAngle);
+							newValues[0] = (newValues[0] * cosinus - newValues[1] * sinus);
+							newValues[1] = (newValues[0] * sinus + newValues[1] * cosinus);
+						}
+					}
+				}
+
+				newValues[0] /= weight;
+				newValues[1] /= weight;
+			}
+			outVelocityField[(yM * SIM_WIDTH + xM) * 2] = newValues[0];
+			outVelocityField[(yM * SIM_WIDTH + xM) * 2 + 1] = newValues[1];
+		}
+	}
+}
+
+void simulateSerial(float* inVelocityField, float* outVelocityField) {
+	calculateNewValuesSerial(inVelocityField, outVelocityField);
 }
 
 // ****************************************************************************
@@ -272,10 +309,45 @@ void anim_gpu(DataBlock *d, int ticks) {
 	dim3 threads(BLOCK_WIDTH, BLOCK_WIDTH);
 	CPUAnimBitmap* bitmap = d->bitmap;
 
+#define __CUDA__
+
+#ifdef __CUDA__
+
+	cudaEvent_t start, stop;
+	float time;
+	cudaEventCreate(&start);
+	cudaEventCreate(&stop);
+	cudaEventRecord(start);
+
 	simulate<<<blocks, threads>>>(d->dev_inSrc, d->dev_outSrc);
-	float_to_color<<<blocks, threads>>>(d->output_bitmap, d->dev_outSrc);
+
+	cudaEventRecord(stop);
+	cudaEventSynchronize(stop);
+	cudaEventElapsedTime(&time, start, stop);
+	printf("Simulate: %f ms\n", time);
+
+	float_to_color<<<blocks, threads>>>(d->output_bitmap, d->dev_inSrc);
 	swap(d->dev_inSrc, d->dev_outSrc);
 	cudaMemcpy(bitmap->get_ptr(), d->output_bitmap, bitmap->image_size(), cudaMemcpyDeviceToHost);
+#else // serial execution
+	cudaEvent_t start, stop;
+	float time;
+	cudaEventCreate(&start);
+	cudaEventCreate(&stop);
+	cudaEventRecord(start);
+
+	simulateSerial(d->dev_inSrc, d->dev_outSrc);
+
+	float_to_color_serial(d->output_bitmap, d->dev_inSrc);
+	swap(d->dev_inSrc, d->dev_outSrc);
+	memcpy(bitmap->get_ptr(), d->output_bitmap, bitmap->image_size());
+
+	cudaEventRecord(stop);
+	cudaEventSynchronize(stop);
+	cudaEventElapsedTime(&time, start, stop);
+	printf("Simulate: %f ms\n", time);
+#endif
+
 }
 
 // ****************************************************************************
@@ -295,9 +367,16 @@ int main(void) {
 
 	// allocate device memory
 	int imageSize = animBitmap.image_size(); // image_size() returns width * height * 4
+
+#ifdef __CUDA__
 	cudaMalloc((void**) &dataBlock.output_bitmap, imageSize * 2);
 	cudaMalloc((void**) &dataBlock.dev_inSrc, imageSize * 2);
 	cudaMalloc((void**) &dataBlock.dev_outSrc, imageSize * 2);
+#else
+	dataBlock.output_bitmap = (unsigned char*) malloc(imageSize * 2);
+	dataBlock.dev_inSrc = (float*) malloc(imageSize * 2);
+	dataBlock.dev_outSrc = (float*) malloc(imageSize * 2);
+#endif
 
 	// initialize vectorField
 	for (int i = 0; i < SIM_HEIGHT * SIM_WIDTH; i++) {
@@ -310,8 +389,12 @@ int main(void) {
 		velocityField[i][1] = 0;
 	}
 
+#ifdef __CUDA__
 	// copy input values to device
 	cudaMemcpy(dataBlock.dev_inSrc, velocityField, imageSize * 2, cudaMemcpyHostToDevice);
+#else
+	memcpy(dataBlock.dev_inSrc, velocityField, imageSize * 2);
+#endif
 
 	// start simulation
 	animBitmap.anim_and_exit((void (*)(void*, int)) anim_gpu, (void (*)(void*))anim_exit );
